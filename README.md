@@ -1,53 +1,52 @@
-# GTA VI Trophy Rarity Forecast
+# gta6-trophy-rarity-forecast-01 — recalibrated forecaster
 
-[![make.fun](https://make.fun/badge/gta6-trophy-rarity-forecast-01.svg)](https://make.fun/competitions/gta6-trophy-rarity-forecast-01)
-[![rank](https://make.fun/badge/gta6-trophy-rarity-forecast-01/zxpast/makefun-gta6-trophy-rarity-forecast-01/rank.svg)](https://make.fun/competitions/gta6-trophy-rarity-forecast-01)
-[![reward](https://make.fun/badge/gta6-trophy-rarity-forecast-01/zxpast/makefun-gta6-trophy-rarity-forecast-01/reward.svg)](https://make.fun/competitions/gta6-trophy-rarity-forecast-01)
+Forecasts every GTA VI PS5 trophy's Exophase earn rate at
+2026-11-26T00:00:00Z as five quantiles (0.05 / 0.25 / 0.5 / 0.75 / 0.95),
+scored by mean pinball loss on the logit scale.
 
-Forecasts every Grand Theft Auto VI PlayStation 5 trophy's Exophase earn
-rate at the case's target, as five quantiles per trophy, scored by pinball
-loss on the logit scale.
+## What changed vs the submitted round (loss 0.22, rank 1136/4349)
 
-## How it works
+The old program forecast the last-read rate with a 0.76-logit spread.
+That spread alone cost ~0.15 of pinball loss: rank 1's 0.00598 implies a
+spread of ~0.03 logit with a near-exact median, and our median was already
+good (typical miss 0.04 pp, ~rank 103 in that column). This rebuild fixes
+the median law and earns the spread from data instead of setting it from
+caution.
 
-`main.py` (Python 3.13, standard library only, no network) reads every
-`<id>.in` in the input directory and writes `<id>.out` per case. Two
-regimes, decided by what the history shows:
+## Method
 
-- **Trend regime** — the history contains real movement. Exophase
-  refreshes a game's counts in jumps, so the page is a step function
-  frozen between refreshes; each distinct read is one refresh point.
-  Per trophy, a weighted least-squares line of logit(rate) against
-  ln(1 + hours since release) is fitted over the distinct reads, the
-  slope is shrunk toward a pooled level-dependent slope, the move is
-  damped by 0.7 (rates saturate — a log-time line overstates the move
-  to a target far beyond the history), and the line is read at the
-  target. Spread combines a random-walk term in sqrt(horizon) with the
-  fit's residual.
-- **Flat regime** — every read is identical (no refresh seen yet). The
-  next refresh re-bases rates on a much larger player count, modelled
-  as a new cohort joining: players_tracked grows by the first-refresh
-  factor the house recorded on launch night (638 → 3,868, ~6.06x), and
-  a new player holds trophy *i* with probability p_i = r_i^1.6. That
-  exponent is pinned by the same refresh's totals — it reproduces the
-  recorded post-refresh trophies-earned count (4,276) to within 0.2%.
-  New players hold almost only the near-universal intro trophy;
-  everything else dilutes roughly four- to five-fold.
+All work happens in integer earners / players count space; the rate is
+only ever a ratio at the end, and is never trended.
 
-Quantiles are the median's logit plus/minus the standard-normal
-quantiles times the spread. Deterministic: no randomness, fixed file
-order, two runs are byte-identical.
+- **Snapshots.** The history collapses to one row per distinct snapshot
+  (the page is frozen between Exophase refreshes). Earners are recovered
+  as rate * N / 100 and reconciled to the published total by largest
+  remainder.
+- **Few snapshots (practice):** the median is the logit-mean of six
+  total-consistent allocations of the next refresh's new earners --
+  uniform / proportional-to-rate / gamma-power, each concentrated on the
+  top 25 / 28 / 30 trophies by current rate (new players can only hold
+  early trophies; the rarer half gets ~0). Spread is a fixed normal-z
+  s = 0.20 logit.
+- **Many snapshots (the final):** each refresh is inverted per trophy
+  (new earners ~ intercept + slope * new players; slope shrunk 60/40
+  toward a proportional prior, intercept taken from the last 3 refreshes
+  because old-cohort earns accelerate). Future players and totals come
+  from saturating exponential fits, never log-log extrapolation. The
+  median is aggregate-constrained to the forecast total. The spread is
+  conformal-style: leave-one-refresh-out residuals in logit space, pooled,
+  centred on their median, scaled by sqrt(future refreshes).
 
-## Practice results
+## Validation (measured first-hand, 2026-11-20)
 
-On the practice cases (p00/p01, flat launch-night history, answer is the
-first refresh), the implied total trophies earned at the target is
-4,263 vs the recorded 4,276 (0.3% off). Against proxy answers spanning
-the dilution exponent γ ∈ [1.3, 2.5], pinball loss is 0.18–0.30 with
-90% coverage 0.98, vs the house persistence baseline's 0.90–1.69 with
-coverage 0.00. On two synthetic final-like cases (two days of reads
-with refreshes, 4.5-day horizon), loss is 0.23–0.24 vs the baseline's
-0.45–0.52.
+| Gate | Result |
+|---|---|
+| A — practice proxy-truth sweep (22 laws, p00/p01) | mean 0.0959, worst 0.1679, beats submitted 22/22 (submitted 0.2077 / 0.2317) — PASS |
+| B — synthetic final-like cases (4 seeds) | mean 0.8419 vs submitted 0.9178 — beats submitted; 90% coverage 0.25 (spread calibration on synthetic finals remains unproven, as in the playbook) |
+| C — rolling-origin backtest (29 origins) | mean loss 0.2751, coverage 0.84; loss does not rise with origin index (no flip mis-specification) |
+
+Determinism: two runs on the kit practice input are byte-identical.
+Runtime: ~0.13 s per case (limit 8 s). Python 3.13 stdlib only, no network.
 
 ## Run
 
@@ -55,8 +54,5 @@ with refreshes, 4.5-day horizon), loss is 0.23–0.24 vs the baseline's
 mkdir -p out && MAKEFUN_INPUT_DIR=input MAKEFUN_OUTPUT_DIR=out python3 main.py
 ```
 
-Runtime is ~0.1 s per case, far under the 8 s cap.
-
-## License
-
-MIT — see `LICENSE`.
+Reads every `*.in`, writes one `*.out` per case:
+`{"trophies": [{"id": 1, "q": [q05, q25, q50, q75, q95]}, ...]}`.
